@@ -64,6 +64,10 @@ import java.util.Map;
             // Request ile Authorization kodu kullanarak access token almak
             ResponseEntity<Map> tokenResponse = restTemplate.postForEntity("https://oauth2.googleapis.com/token", request, Map.class);
             String accessToken = (String) tokenResponse.getBody().get("access_token");
+            String refreshToken = (String) tokenResponse.getBody().get("refresh_token");
+
+            session.setAttribute("access_token", accessToken);
+            session.setAttribute("refresh_token", refreshToken);
 
             // Access token ile bir request olusturuyoruz
             HttpHeaders userHeaders = new HttpHeaders();
@@ -88,11 +92,63 @@ import java.util.Map;
             return "redirect:/profile";
         }
 
+
+        private String refreshAccessToken(String refreshToken) {
+            HttpHeaders headers = new HttpHeaders();
+            headers.setContentType(MediaType.APPLICATION_FORM_URLENCODED);
+
+            MultiValueMap<String, String> form = new LinkedMultiValueMap<>();
+            form.add("client_id", clientId);
+            form.add("client_secret", clientSecret);
+            form.add("refresh_token", refreshToken);   // Yenileme kodu
+            form.add("grant_type", "refresh_token");   // Yenileme yöntemi
+
+            HttpEntity<MultiValueMap<String, String>> request = new HttpEntity<>(form, headers);
+
+            ResponseEntity<Map> response = restTemplate.postForEntity("https://oauth2.googleapis.com/token", request, Map.class);
+            return (String) response.getBody().get("access_token");
+        }
+
+
         @GetMapping("/profile")
         public String profile(Model model, HttpSession session) {
-            model.addAttribute("name", session.getAttribute("name"));
-            model.addAttribute("email", session.getAttribute("email"));
-            model.addAttribute("photo", session.getAttribute("picture"));
+            String accessToken = (String) session.getAttribute("access_token");
+
+            // İsteği yap
+            HttpHeaders userHeaders = new HttpHeaders();
+            userHeaders.setBearerAuth(accessToken);
+            HttpEntity<Void> userRequest = new HttpEntity<>(userHeaders);
+
+            ResponseEntity<Map> userInfoResponse = restTemplate.exchange(
+                    "https://www.googleapis.com/oauth2/v3/userinfo",
+                    HttpMethod.GET,
+                    userRequest,
+                    Map.class
+            );
+
+            // Eğer token expired ise refresh token kullanarak yeni bir access token al
+            if (userInfoResponse.getStatusCode() == HttpStatus.UNAUTHORIZED) {
+                String refreshToken = (String) session.getAttribute("refresh_token");
+                accessToken = refreshAccessToken(refreshToken); // yeni token al
+                session.setAttribute("access_token", accessToken);
+
+                // tekrar userinfo isteği yap
+                userHeaders.setBearerAuth(accessToken);
+                userRequest = new HttpEntity<>(userHeaders);
+
+                userInfoResponse = restTemplate.exchange(
+                        "https://www.googleapis.com/oauth2/v3/userinfo",
+                        HttpMethod.GET,
+                        userRequest,
+                        Map.class
+                );
+            }
+
+            Map<String, Object> userInfo = userInfoResponse.getBody();
+
+            model.addAttribute("name", userInfo.get("name"));
+            model.addAttribute("email", userInfo.get("email"));
+            model.addAttribute("photo", userInfo.get("picture"));
             return "user-profile";
         }
     }
